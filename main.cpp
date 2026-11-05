@@ -1,3 +1,12 @@
+#include <iostream>
+#include <thread>
+#include <mutex>
+#include <condition_variable>
+#include <queue>
+#include <vector>
+#include <functional>
+#include <chrono>
+
 struct task_t { void operator()(); };
 struct th_pool_t {
   using f_t = std::function< void(void) >;
@@ -5,11 +14,17 @@ struct th_pool_t {
   ~th_pool_t();
   void submit(f_t f);
 private:
+  void pause();
+  void resume();
+  void wait();
   void execute();
   std::queue< f_t > tasks_;
   std::mutex mx_;
   std::condition_variable cd_;
-  bool stop_{false};
+  std::condition_variable done_;
+  bool stop_ { false };
+  bool paused_ { false };
+  unsigned int active_ { 0 };
   std::vector< std::thread > ths_;
 };
 
@@ -69,6 +84,34 @@ void th_pool_t::execute()
     } catch (...) {}
     lck.lock();
   }  while (!stop_ || !tasks_.empty());
+}
+
+void th_pool_t::wait()
+{
+  std::unique_lock lck(mx_);
+
+  auto condwait = [this]()
+  {
+    return tasks_.empty() && active_ == 0;
+  };
+
+  done_.wait(lck, condwait);
+}
+
+void th_pool_t::pause()
+{
+  std::lock_guard lck(mx_);
+  paused_ = true;
+}
+
+void th_pool_t::resume()
+{
+  {
+    std::lock_guard lck(mx_);
+    paused_ = false;
+  }
+
+  cd_.notify_all();
 }
 
 int main()
