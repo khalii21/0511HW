@@ -13,10 +13,10 @@ struct th_pool_t {
   explicit th_pool_t(unsigned int k);
   ~th_pool_t();
   void submit(f_t f);
-private:
   void pause();
   void resume();
   void wait();
+private:
   void execute();
   std::queue< f_t > tasks_;
   std::mutex mx_;
@@ -31,6 +31,12 @@ private:
 void th_pool_t::submit(f_t f)
 {
   mx_.lock();
+
+  if (stop_)
+  {
+    mx_.unlock();
+    return;
+  }
 
   tasks_.push(std::move(f));
 
@@ -68,21 +74,31 @@ void th_pool_t::execute()
   {
     auto proceed = [&]()
     {
-      return !tasks_.empty() || stop_;
+      return (!tasks_.empty() && !paused_) || stop_;
     };
     cd_.wait(lck, proceed);
-    if (tasks_.empty())
+    if (stop_ && tasks_.empty())
+    {
+      continue;
+    }
+    if (paused_ && !stop_)
     {
       continue;
     }
     auto task = std::move(tasks_.front());
     tasks_.pop();
+    ++active_;
     lck.unlock();
     try
     {
       task();
     } catch (...) {}
     lck.lock();
+    --active_;
+    if (tasks_.empty() && active_ == 0)
+    {
+      done_.notify_all();
+    }
   }  while (!stop_ || !tasks_.empty());
 }
 
